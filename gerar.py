@@ -73,11 +73,11 @@ def roteiro(a, modelo):
     fim = 'A aula completa, com texto e teste, está grátis em magystic ponto com, barra curso.'
     if prox:
         fim += f" Amanhã tem a Aula {prox['num']}: {prox['titulo']}."
-    padrao = {'abertura': f"Aula {a['num']} do curso grátis da MAGYSTIC. {a['titulo']}.",
+    padrao = {'abertura': f"Aula {a['num']} do curso Minha Marca Registrada. {a['titulo']}.",
               'pontos': a['pontos'][:3], 'fechamento': fim}
     if SEM_VOZ or not modelo:
         return padrao
-    pedido = f"""Você escreve a narração de um vídeo curto (Reels de uns 60 segundos) da Aula {a['num']} de um curso grátis da MAGYSTIC que ensina empreendedores a registrar a própria marca no INPI.
+    pedido = f"""Você escreve a narração de um vídeo curto (Reels de uns 60 segundos) da Aula {a['num']} do curso Minha Marca Registrada, um curso grátis da MAGYSTIC que ensina empreendedores a registrar a própria marca no INPI.
 Regras:
 - Use SOMENTE as informações da aula abaixo. Não invente números, prazos, valores, exemplos reais ou artigos de lei que não estejam nela.
 - Português do Brasil, frases curtas, tom animado e claro, falando direto com o empreendedor ("você").
@@ -265,7 +265,7 @@ def montar_video(a, rot, duracoes, audio, destino):
     logo = Image.open(os.path.join(AQUI, 'logo.png')).convert('RGBA')
     logo.thumbnail((76, 76))
     marca = espacado('MAGYSTIC', fonte('serif', 36, 600), TINTA, 7)
-    selo_topo = pilula('CURSO GRÁTIS', fonte('sans', 26, 500), VERDE + (40,), VERDE, 22, 10)
+    selo_topo = pilula('MINHA MARCA REGISTRADA', fonte('sans', 26, 500), VERDE + (40,), VERDE, 22, 10)
 
     L = W - 160
     cenas = []
