@@ -431,7 +431,7 @@ def montar_video(a, rot, duracoes, audio, destino):
                 entrar(quadro, el, (W - el.width) // 2, y, t, atraso)
                 y += el.height + (60 if nome in ('url', 'tit') else 36)
         # legenda
-        for (a0, a1, txt) in legendas:
+        for (a0, a1, txt) in (legendas if os.environ.get('LEGENDAS') == '1' else []):
             if a0 <= tg < a1:
                 img = legenda_img(txt)
                 quadro.paste(img, (70, 1470), img)
