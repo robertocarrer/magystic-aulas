@@ -26,6 +26,7 @@ W, H, FPS = 1080, 1920, 30
 FUNDO = (21, 13, 31); SUPER = (34, 23, 50); OURO = (217, 180, 104); VERDE = (95, 209, 148)
 TINTA = (243, 238, 247); DIM = (197, 186, 210); APAGADO = (146, 137, 162); VERDE_TINTA = (16, 40, 28)
 PAUSA = 0.45
+REUSAR = False  # AULAS='reusar 0' refaz o vídeo com a narração já publicada
 
 # ---------------------------------------------------------------- rede
 
@@ -459,14 +460,54 @@ def enviar(num, arq, tipo='video', ctype='video/mp4'):
     r = http(f'{SITE}/api/curso/{tipo}/{num}', dados, {'authorization': 'Bearer ' + tok, 'content-type': ctype}, method='POST')
     print('  enviado:', r.decode())
 
+def audio_existente(a, pasta):
+    """Reaproveita a narração do vídeo já publicado (sem gastar cota do Gemini)."""
+    url = a['video'] if a['video'].startswith('http') else SITE + a['video']
+    old = os.path.join(pasta, 'antigo.mp4'); bruto = os.path.join(pasta, 'antigo.wav')
+    with open(old, 'wb') as f:
+        f.write(http(url, timeout=300))
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', old, '-vn', '-ac', '1', '-ar', '24000', '-c:a', 'pcm_s16le', bruto], check=True)
+    with wave.open(bruto) as w:
+        taxa = w.getframerate(); n = w.getnframes()
+        am = struct.unpack('<%dh' % n, w.readframes(n))
+    jan = int(taxa * 0.02)
+    q = [max(abs(x) for x in am[i:i + jan]) < 900 for i in range(0, n - jan, jan)]
+    falas, i = [], 0  # trechos de fala (inicio, fim) em segundos
+    while i < len(q):
+        if not q[i]:
+            j = i
+            while j < len(q) and not q[j]:
+                j += 1
+            if j - i >= 8:  # ignora estalos menores que 160 ms
+                falas.append([i * 0.02, j * 0.02])
+            i = j
+        else:
+            i += 1
+    while len(falas) > 5 and falas[-1][1] - falas[-1][0] < 0.4:
+        falas.pop()
+    s0, e = falas[0][0], falas[-1][1]
+    pausas = sorted(((falas[k + 1][0] - falas[k][1], k) for k in range(len(falas) - 1)), reverse=True)[:4]
+    inicios = [s0] + sorted(falas[k + 1][0] for _, k in pausas)
+    if len(inicios) != 5:
+        raise RuntimeError('não achei as 5 partes da narração antiga')
+    duracoes = [inicios[k + 1] - inicios[k] - PAUSA for k in range(4)] + [e - inicios[4]]
+    audio = os.path.join(pasta, 'narracao.wav')
+    a0, a1 = int(s0 * taxa), int(e * taxa) + jan
+    with wave.open(audio, 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(taxa)
+        w.writeframes(b'\x00\x00' * int(0.3 * taxa) + struct.pack('<%dh' % len(am[a0:a1]), *am[a0:a1]) + b'\x00\x00' * int((0.7 + PAUSA) * taxa))
+    return audio, duracoes
+
 def gerar(num, m_txt, m_voz):
     a = json.loads(http(f'{SITE}/api/curso/aula/{num}'))
     print(f"Aula {num}: {a['titulo']}")
     pasta = os.path.join(SAIDA, f'aula-{num}'); os.makedirs(pasta, exist_ok=True)
-    rot = roteiro(a, m_txt)
+    rot = roteiro(a, None if REUSAR else m_txt)
     falas = [rot['abertura']] + rot['pontos'] + [rot['fechamento']]
     arqs, duracoes = [], []
-    if SEM_VOZ:
+    if REUSAR:
+        audio, duracoes = audio_existente(a, pasta)
+    elif SEM_VOZ:
         for i, fala in enumerate(falas):
             arq = os.path.join(pasta, f'fala-{i}.wav')
             arqs.append(arq); duracoes.append(silencio(max(2.5, len(fala.split()) / 2.6), arq))
@@ -474,8 +515,9 @@ def gerar(num, m_txt, m_voz):
         for arq, d in falar_tudo(m_voz, falas, pasta):
             arqs.append(arq); duracoes.append(d)
     print('  falas:', ', '.join(f'{d:.1f}s' for d in duracoes))
-    audio = os.path.join(pasta, 'narracao.wav')
-    juntar_wavs(arqs, PAUSA, audio)
+    if not REUSAR:
+        audio = os.path.join(pasta, 'narracao.wav')
+        juntar_wavs(arqs, PAUSA, audio)
     destino = os.path.join(SAIDA, f'aula-{num}.mp4')
     capa_arq = fazer_capa(a)
     total = montar_video(a, rot, duracoes, audio, destino, capa_arq)
@@ -501,7 +543,10 @@ def main():
     if len(sys.argv) > 1:
         nums = [int(x) for x in sys.argv[1:]]
     elif os.environ.get('AULAS', '').strip():
-        nums = [int(x) for x in re.split(r'[,\s]+', os.environ['AULAS'].strip()) if x]
+        toks = [x for x in re.split(r'[,\s]+', os.environ['AULAS'].strip()) if x]
+        global REUSAR
+        REUSAR = 'reusar' in toks
+        nums = [int(x) for x in toks if x != 'reusar']
     else:
         nums = json.loads(http(f'{SITE}/api/curso/pendentes'))['pendentes'][:MAX_VIDEOS]
     if SO_CAPA:
@@ -519,7 +564,7 @@ def main():
     if not nums:
         print('Nenhuma aula pendente.'); return
     m_txt = m_voz = None
-    if not SEM_VOZ:
+    if not SEM_VOZ and not REUSAR:
         m_txt, m_voz = escolher_modelos()
         print('Modelos:', m_txt, m_voz)
     falhas = 0
