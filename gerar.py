@@ -6,14 +6,15 @@ Uso:
   python gerar.py 0 1          -> gera aulas específicas
 Variáveis: GEMINI_API_KEY (narração), SEM_VOZ=1 (teste sem narração), NAO_ENVIAR=1 (não envia ao site)
 """
-import os, sys, json, re, time, wave, base64, subprocess, urllib.request, urllib.error
+import os, sys, json, re, time, wave, base64, struct, subprocess, urllib.request, urllib.error
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 SITE = os.environ.get('SITE', 'https://magystic.com')
 KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 SEM_VOZ = os.environ.get('SEM_VOZ') == '1' or not KEY
 NAO_ENVIAR = os.environ.get('NAO_ENVIAR') == '1'
-MAX_VIDEOS = int(os.environ.get('MAX_VIDEOS', '2'))
+MAX_VIDEOS = int(os.environ.get('MAX_VIDEOS', '9'))
+SO_CAPA = os.environ.get('SO_CAPA', '').strip().lower() in ('1', 'true', 'sim')
 VOZ = os.environ.get('VOZ', 'Kore')
 AQUI = os.path.dirname(os.path.abspath(__file__))
 FONTES = os.environ.get('FONTES', os.path.join(AQUI, 'fontes'))
@@ -35,6 +36,9 @@ def http(url, data=None, headers=None, timeout=180, method=None):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
+class CotaDiaria(Exception):
+    pass
+
 def gemini(modelo, corpo, tentativas=7):
     for i in range(tentativas):
         try:
@@ -42,6 +46,8 @@ def gemini(modelo, corpo, tentativas=7):
                                    {'content-type': 'application/json', 'x-goog-api-key': KEY}))
         except urllib.error.HTTPError as e:
             msg = e.read().decode(errors='replace')[:400]
+            if e.code == 429 and ('PerDay' in msg or 'per day' in msg.lower() or 'free_tier_requests' in msg):
+                raise CotaDiaria(msg)
             if e.code in (429, 500, 502, 503, 504) and i < tentativas - 1:
                 espera = 25 * (i + 1)
                 print(f'  Gemini {e.code}, tentando de novo em {espera}s')
@@ -63,7 +69,7 @@ def escolher_modelos():
             if p in lista:
                 return p
         return lista[0] if lista else None
-    return (txt or pref(textos, ['gemini-2.5-flash', 'gemini-flash-latest']),
+    return (txt or pref(textos, ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash']),
             tts or pref(vozes, ['gemini-2.5-flash-preview-tts', 'gemini-2.5-flash-tts']))
 
 # ---------------------------------------------------------------- roteiro e voz
@@ -120,6 +126,61 @@ def falar(modelo, texto, arq):
     with wave.open(arq, 'wb') as w:
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(taxa); w.writeframes(pcm)
     return len(pcm) / 2 / taxa
+
+def falar_tudo(modelo, falas, pasta):
+    """Uma só chamada de voz para o vídeo inteiro; corta nas pausas entre as partes."""
+    roteiro_txt = '\n\n'.join(falas)
+    corpo = {'contents': [{'parts': [{'text': 'Diga em português do Brasil, com voz animada, clara e acolhedora, '
+                                              'como um professor num vídeo curto. Faça uma pausa curta entre os parágrafos.\n\n' + roteiro_txt}]}],
+             'generationConfig': {'responseModalities': ['AUDIO'],
+                                  'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': VOZ}}}}}
+    r = gemini(modelo, corpo)
+    parte = next(p['inlineData'] for p in r['candidates'][0]['content']['parts'] if 'inlineData' in p)
+    pcm = base64.b64decode(parte['data'])
+    m = re.search(r'rate=(\d+)', parte.get('mimeType', ''))
+    taxa = int(m.group(1)) if m else 24000
+    amostras = struct.unpack('<%dh' % (len(pcm) // 2), pcm[:len(pcm) // 2 * 2])
+    total = len(amostras)
+    # energia em janelas de 20 ms
+    jan = int(taxa * 0.02); quiet = []
+    for i in range(0, total - jan, jan):
+        seg = amostras[i:i + jan]
+        quiet.append(max(abs(x) for x in seg) < 900)
+    pausas = []  # (inicio, fim) em amostras, só pausas >= 240 ms
+    i = 0
+    while i < len(quiet):
+        if quiet[i]:
+            j = i
+            while j < len(quiet) and quiet[j]:
+                j += 1
+            if (j - i) * 0.02 >= 0.24 and i > 0 and j < len(quiet):
+                pausas.append((i * jan, j * jan))
+            i = j
+        else:
+            i += 1
+    tam = [len(f) for f in falas]
+    cortes, acum = [], 0
+    for k in range(len(falas) - 1):
+        acum += tam[k]
+        alvo = total * acum / sum(tam)
+        cand = [p for p in pausas if all(abs((p[0] + p[1]) / 2 - c) > taxa * 0.8 for c in cortes)]
+        if cand:
+            p = min(cand, key=lambda p: abs((p[0] + p[1]) / 2 - alvo))
+            meio = (p[0] + p[1]) // 2 if abs((p[0] + p[1]) / 2 - alvo) < taxa * 3 else int(alvo)
+        else:
+            meio = int(alvo)
+        cortes.append(meio)
+    cortes = sorted(cortes)
+    lim = [0] + cortes + [total]
+    saida = []
+    for k in range(len(falas)):
+        a, b = lim[k], lim[k + 1]
+        arq = os.path.join(pasta, f'fala-{k}.wav')
+        with wave.open(arq, 'wb') as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(taxa)
+            w.writeframes(struct.pack('<%dh' % (b - a), *amostras[a:b]))
+        saida.append((arq, (b - a) / taxa))
+    return saida
 
 def silencio(segundos, arq, taxa=24000):
     with wave.open(arq, 'wb') as w:
@@ -387,12 +448,12 @@ def montar_video(a, rot, duracoes, audio, destino):
 
 # ---------------------------------------------------------------- fluxo
 
-def enviar(num, arq):
+def enviar(num, arq, tipo='video', ctype='video/mp4'):
     url = os.environ['ACTIONS_ID_TOKEN_REQUEST_URL'] + '&audience=magystic.com'
     tok = json.loads(http(url, headers={'authorization': 'bearer ' + os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']}))['value']
     with open(arq, 'rb') as f:
         dados = f.read()
-    r = http(f'{SITE}/api/curso/video/{num}', dados, {'authorization': 'Bearer ' + tok, 'content-type': 'video/mp4'}, method='POST')
+    r = http(f'{SITE}/api/curso/{tipo}/{num}', dados, {'authorization': 'Bearer ' + tok, 'content-type': ctype}, method='POST')
     print('  enviado:', r.decode())
 
 def gerar(num, m_txt, m_voz):
@@ -402,14 +463,14 @@ def gerar(num, m_txt, m_voz):
     rot = roteiro(a, m_txt)
     falas = [rot['abertura']] + rot['pontos'] + [rot['fechamento']]
     arqs, duracoes = [], []
-    for i, fala in enumerate(falas):
-        arq = os.path.join(pasta, f'fala-{i}.wav')
-        if SEM_VOZ:
-            d = silencio(max(2.5, len(fala.split()) / 2.6), arq)
-        else:
-            d = falar(m_voz, fala, arq)
-        print(f'  fala {i}: {d:.1f}s')
-        arqs.append(arq); duracoes.append(d)
+    if SEM_VOZ:
+        for i, fala in enumerate(falas):
+            arq = os.path.join(pasta, f'fala-{i}.wav')
+            arqs.append(arq); duracoes.append(silencio(max(2.5, len(fala.split()) / 2.6), arq))
+    else:
+        for arq, d in falar_tudo(m_voz, falas, pasta):
+            arqs.append(arq); duracoes.append(d)
+    print('  falas:', ', '.join(f'{d:.1f}s' for d in duracoes))
     audio = os.path.join(pasta, 'narracao.wav')
     juntar_wavs(arqs, PAUSA, audio)
     destino = os.path.join(SAIDA, f'aula-{num}.mp4')
@@ -419,6 +480,14 @@ def gerar(num, m_txt, m_voz):
     print(f'  vídeo: {destino} ({total:.1f}s, {os.path.getsize(destino) / 1e6:.1f} MB)')
     if not NAO_ENVIAR:
         enviar(num, destino)
+    fazer_capa(a)
+
+def fazer_capa(a):
+    arq = os.path.join(SAIDA, f"capa-aula-{a['num']}.jpg")
+    capa(a, arq)
+    print('  capa:', arq)
+    if not NAO_ENVIAR:
+        enviar(a['num'], arq, 'capa', 'image/jpeg')
 
 def main():
     os.makedirs(SAIDA, exist_ok=True)
@@ -428,6 +497,18 @@ def main():
         nums = [int(x) for x in re.split(r'[,\s]+', os.environ['AULAS'].strip()) if x]
     else:
         nums = json.loads(http(f'{SITE}/api/curso/pendentes'))['pendentes'][:MAX_VIDEOS]
+    if SO_CAPA:
+        if not nums or not os.environ.get('AULAS', '').strip():
+            nums = list(range(100))
+        falhas = 0
+        for n in nums:
+            try:
+                fazer_capa(json.loads(http(f'{SITE}/api/curso/aula/{n}')))
+            except Exception as e:
+                falhas += 1; print(f'ERRO na capa {n}: {e}')
+        if falhas:
+            sys.exit(1)
+        return
     if not nums:
         print('Nenhuma aula pendente.'); return
     m_txt = m_voz = None
@@ -438,11 +519,58 @@ def main():
     for n in nums:
         try:
             gerar(n, m_txt, m_voz)
+        except CotaDiaria:
+            falhas += 1
+            print(f'Cota diária do Gemini acabou na aula {n}. As próximas saem na execução de amanhã.')
+            break
         except Exception as e:
             falhas += 1
             print(f'ERRO na aula {n}: {e}')
     if falhas:
         sys.exit(1)
+
+
+# ---------------------------------------------------------------- capa do Reel
+
+def capa(a, destino):
+    """Capa 1080x1920 do Reel. O essencial fica no miolo 1080x1350 (recorte do feed do Instagram)."""
+    img = fundo_base().crop((0, 200, W, 200 + H)).convert('RGBA')
+    L = W - 180
+    logo = Image.open(os.path.join(AQUI, 'logo.png')).convert('RGBA')
+    logo.thumbnail((92, 92))
+    marca = espacado('MAGYSTIC', fonte('serif', 40, 600), TINTA, 8)
+    # topo do miolo (y ≈ 300)
+    y = 330
+    larg = logo.width + 22 + marca.width
+    x0 = (W - larg) // 2
+    colar(img, logo, x0, y)
+    colar(img, marca, x0 + logo.width + 22, y + (logo.height - marca.height) // 2)
+    y += logo.height + 46
+    selo = pilula('CURSO MINHA MARCA REGISTRADA', fonte('sans', 28, 500), VERDE + (46,), VERDE, 26, 12)
+    colar(img, selo, (W - selo.width) // 2, y)
+    y += selo.height + 50
+    rot = espacado('AULA', fonte('sans', 46, 500), OURO, 16)
+    colar(img, rot, (W - rot.width) // 2, y)
+    y += rot.height + 4
+    num = bloco_texto(str(a['num']), fonte('serif', 300, 600), L, OURO, 0.95, 'centro')
+    colar(img, num, (W - L) // 2, y)
+    y += num.height - 70
+    tam = 70
+    tit = bloco_texto(a['titulo'], fonte('serif', tam, 600), L, TINTA, 1.12, 'centro')
+    while tit.height > 260 and tam > 50:
+        tam -= 4; tit = bloco_texto(a['titulo'], fonte('serif', tam, 600), L, TINTA, 1.12, 'centro')
+    colar(img, tit, (W - L) // 2, y)
+    y += tit.height + 40
+    frase = (a.get('pontos') or [a.get('resumo', '')])[0]
+    ft = bloco_texto(frase, fonte('sans', 40, 400), L - 100, DIM, 1.32, 'centro')
+    card = cartao(ft, L, pad=50)
+    if y + card.height < 1640:
+        colar(img, card, (W - L) // 2, y)
+    # rodapé (fora do recorte do feed, aparece no Reel aberto)
+    url = pilula('Grátis em magystic.com/curso', fonte('sans', 44, 600), VERDE + (255,), VERDE_TINTA, 40, 20)
+    colar(img, url, (W - url.width) // 2, 1700)
+    img.convert('RGB').save(destino, 'JPEG', quality=90, optimize=True, progressive=True)
+    return destino
 
 if __name__ == '__main__':
     main()
