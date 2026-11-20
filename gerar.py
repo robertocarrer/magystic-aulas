@@ -72,7 +72,7 @@ def roteiro(a, modelo):
     prox = a.get('proxima')
     fim = 'A aula completa, com texto e teste, está grátis em magystic ponto com, barra curso.'
     if prox:
-        fim += f" Amanhã tem a Aula {prox['num']}: {prox['titulo']}."
+        fim += f" Na próxima aula: Aula {prox['num']}, {prox['titulo']}."
     padrao = {'abertura': f"Aula {a['num']} do curso Minha Marca Registrada. {a['titulo']}.",
               'pontos': a['pontos'][:3], 'fechamento': fim}
     if SEM_VOZ or not modelo:
@@ -288,9 +288,9 @@ def montar_video(a, rot, duracoes, audio, destino):
         'tit': bloco_texto('A aula completa é grátis', fonte('serif', 84, 600), L, TINTA, 1.12, 'centro'),
         'sub': bloco_texto('Texto, resumo e teste rápido em', fonte('sans', 44, 400), L, DIM, 1.3, 'centro'),
         'url': pilula('magystic.com/curso', fonte('sans', 60, 600), VERDE + (255,), VERDE_TINTA, 50, 24),
-        'prox': bloco_texto(f"Amanhã: Aula {prox['num']} · {prox['titulo']}" if prox else 'Você chegou ao fim do curso!',
+        'prox': bloco_texto(f"Próxima: Aula {prox['num']} · {prox['titulo']}" if prox else 'Você chegou ao fim do curso!',
                             fonte('sans', 42, 500), L, OURO, 1.3, 'centro'),
-        'dia': bloco_texto('Uma aula nova por dia', fonte('sans', 36, 400), L, APAGADO, 1.3, 'centro'),
+        'dia': bloco_texto('Um módulo novo toda segunda-feira', fonte('sans', 36, 400), L, APAGADO, 1.3, 'centro'),
     }
     cenas.append(('fim', els, rot['fechamento']))
 
