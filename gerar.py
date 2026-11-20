@@ -321,7 +321,7 @@ def blocos_legenda(texto, max_c=34):
 
 # ---------------------------------------------------------------- vídeo
 
-def montar_video(a, rot, duracoes, audio, destino):
+def montar_video(a, rot, duracoes, audio, destino, capa_arq=None):
     fundo = fundo_base()
     logo = Image.open(os.path.join(AQUI, 'logo.png')).convert('RGBA')
     logo.thumbnail((76, 76))
@@ -393,8 +393,11 @@ def montar_video(a, rot, duracoes, audio, destino):
            '-i', '-', '-i', audio, '-c:v', 'libx264', '-preset', 'medium', '-crf', '24', '-pix_fmt', 'yuv420p',
            '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-shortest', '-movflags', '+faststart', destino]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    capa_bytes = Image.open(capa_arq).convert('RGB').resize((W, H)).tobytes() if capa_arq and os.path.exists(capa_arq) else None
     for q in range(n_quadros):
         tg = q / FPS
+        if capa_bytes and tg < 0.5:  # primeiro quadro = capa do Reel
+            proc.stdin.write(capa_bytes); continue
         off = int(200 + 180 * __import__('math').sin(tg / 9.0))
         quadro = fundo.crop((0, off, W, off + H)).copy()
         # topo fixo
@@ -474,20 +477,24 @@ def gerar(num, m_txt, m_voz):
     audio = os.path.join(pasta, 'narracao.wav')
     juntar_wavs(arqs, PAUSA, audio)
     destino = os.path.join(SAIDA, f'aula-{num}.mp4')
-    total = montar_video(a, rot, duracoes, audio, destino)
+    capa_arq = fazer_capa(a)
+    total = montar_video(a, rot, duracoes, audio, destino, capa_arq)
     with open(os.path.join(pasta, 'roteiro.json'), 'w', encoding='utf-8') as f:
         json.dump(rot, f, ensure_ascii=False, indent=2)
     print(f'  vídeo: {destino} ({total:.1f}s, {os.path.getsize(destino) / 1e6:.1f} MB)')
     if not NAO_ENVIAR:
         enviar(num, destino)
-    fazer_capa(a)
 
 def fazer_capa(a):
     arq = os.path.join(SAIDA, f"capa-aula-{a['num']}.jpg")
     capa(a, arq)
     print('  capa:', arq)
     if not NAO_ENVIAR:
-        enviar(a['num'], arq, 'capa', 'image/jpeg')
+        try:
+            enviar(a['num'], arq, 'capa', 'image/jpeg')
+        except Exception as e:
+            print('  capa não enviada:', e)
+    return arq
 
 def main():
     os.makedirs(SAIDA, exist_ok=True)
