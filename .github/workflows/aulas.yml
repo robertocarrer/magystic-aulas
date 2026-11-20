@@ -9,6 +9,10 @@ on:
         description: 'Números das aulas, separados por espaço (vazio = as próximas pendentes)'
         required: false
         default: ''
+      so_capas:
+        description: 'Gerar só as capas (sem vídeo; vazio nas aulas = todas)'
+        required: false
+        default: 'nao'
 
 permissions:
   contents: read
@@ -40,12 +44,16 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           AULAS: ${{ github.event.inputs.aulas }}
+          SO_CAPA: ${{ github.event.inputs.so_capas == 'sim' && '1' || '' }}
+          MAX_VIDEOS: '9'
         run: python gerar.py
       - name: Guardar cópia dos vídeos
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: videos
-          path: saida/*.mp4
+          path: |
+            saida/*.mp4
+            saida/*.jpg
           retention-days: 14
           if-no-files-found: ignore
