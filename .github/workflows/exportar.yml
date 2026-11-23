@@ -13,6 +13,11 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install reportlab pillow
+      - run: |
+          mkdir -p fontes
+          curl -sSfL -o fontes/Fraunces.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/fraunces/Fraunces%5BSOFT,WONK,opsz,wght%5D.ttf"
+          curl -sSfL -o fontes/Jost.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/jost/Jost%5Bwght%5D.ttf"
+          curl -sSfL -A "Mozilla/5.0 (magystic-aulas)" -o logo.png https://magystic.com/logo.png
       - run: python exportar.py
       - run: |
           git config user.name "github-actions"
