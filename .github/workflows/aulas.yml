@@ -45,7 +45,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           AULAS: ${{ github.event.inputs.aulas }}
           SO_CAPA: ${{ github.event.inputs.so_capas == 'sim' && '1' || '' }}
-          MAX_VIDEOS: '9'
+          MAX_VIDEOS: '1'   # 1 vídeo por dia (pedido do dono, nov/2026)
         run: python gerar.py
       - name: Guardar cópia dos vídeos
         if: always()
